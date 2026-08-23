@@ -18,7 +18,7 @@
      restores the previous behaviour exactly. -->
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'none';
-  script-src 'self' 'sha256-SpKFOMFDSkEZbm68n6qD2xyQvb9DJ3heJQBZWtDIUYo=' 'sha256-9De48IjMkNm/ZsC8E4vVocdOK1DAMbWL8R0NU/XveMw=';
+  script-src 'self' 'sha256-SpKFOMFDSkEZbm68n6qD2xyQvb9DJ3heJQBZWtDIUYo=' 'sha256-p/kyHsnLrCZTqBUSP1sMKE36qN5x2W2ixWrTAubG1dE=';
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src https://fonts.gstatic.com data:;
   img-src 'self' data: blob:
@@ -2344,6 +2344,28 @@ function scenSetAlso(name, zones){
    identical — by value, not by reference, so a mutation in place would fail it
    too. Wired to the keyboard map as a developer check; costs nothing to leave
    in and means the guarantee can be re-tested on any build, on any data. */
+function scenarioDeleteIsNonDestructive(){
+  if(!ROSTER.length) return {ok:true, reason:"no roster"};
+  const before=JSON.stringify(ROSTER);
+  const beforeScenario=SCEN.on;
+  const beforeChanges=SCEN.changes.slice();
+  const beforeLen=ROSTER.length;
+  if(!SCEN.on){
+    SCEN.on=true; SCEN.roster=copyRoster(ROSTER); SCEN.changes=[];
+    SCEN.live={PEOPLE,ZSTAT,SAPKM,SAPANY,RESIL};
+  }
+  const name=SCEN.roster[0]&&SCEN.roster[0].n;
+  if(name) scenRemove(name);
+  const ok=JSON.stringify(ROSTER)===before && ROSTER.length===beforeLen
+    && SCEN.roster.length===beforeLen-1;
+  /* Restore the scenario state too; this check is deliberately side-effect free. */
+  SCEN.on=beforeScenario;
+  SCEN.changes=beforeChanges;
+  if(beforeScenario){ SCEN.roster=copyRoster(ROSTER); scenApplyAll(); }
+  else { SCEN.roster=null; SCEN.live=null; SCEN.now=null; }
+  return {ok, name};
+}
+
 function engineIsNonDestructive(){
   const before = JSON.stringify({ROSTER, PEOPLE, ZSTAT, SAPKM, SAPANY, RESIL,
                                  SKILLS});
@@ -4962,10 +4984,20 @@ Contains named colleague data — NG systems only.</footer>
 }
 
 /* ── version and changelog ────────────────────────────────────────── */
-const VERSION="2.7.1-nr", BUILT="23 August 2026";
+const VERSION="2.7.2-nr", BUILT="23 August 2026";
 /* Newest first. Keep entries short and say why, not just what — someone holding
    an older copy needs to know whether it matters. */
 const CHANGELOG=[
+  {v:"2.7.2-nr", d:"23 Aug", t:"Scenario Mode: roster mutations stay hypothetical", notes:[
+   "Fixed the Roster view delete action so Scenario Mode calls scenRemove() instead of mutating the live ROSTER.",
+   "The live roster, local storage, and persistent roster file are now protected when a person is removed from the Roster view during a scenario.",
+   "Scenario removal is recorded as a scenario change and immediately replays the existing scenario engine, so the Scenario tab updates without changing the live position.",
+   "This restores the non-destructive Scenario Mode contract while preserving the v2.7.1 three-state coverage-impact correction.",
+   "Added a regression check for the exact failure: delete in Scenario Mode must leave live roster length unchanged and reduce only the scenario headcount.",
+  ],
+  why:"A hypothetical workforce change must never fall through to the live roster mutation path.",
+  impact:"Restored Scenario Mode routing for roster deletion. No live data change.",
+  src:"No data change"},
   {v:"2.7.1-nr", d:"23 Aug", t:"Scenario Mode: impact headline corrected", notes:[
    "The scenario comparison already tracked three coverage states: within the threshold, over it, and no cover. The headline previously showed only the middle state, which could make a serious deterioration look like an improvement.",
    "For example, removing SAP cover can move sites from over 90 minutes to no cover. The over-90 count then falls, even though those sites are worse off. The summary now leads with sites moved into a worse coverage state and keeps no-cover as a separate critical figure.",
@@ -7679,10 +7711,18 @@ function renderRoster(){
       commit(ROSTER[i].n+" now also covers "+z);};
     tr.querySelector(".del").onclick=()=>{
       const nm=ROSTER[i].n||"this row";
-      if(confirm(`Remove ${nm} completely?\n\nIf they have simply left, cancel and put a date in `+
-                 `'Active to' instead — that keeps past figures reproducible.`)){
-        ROSTER.splice(i,1); commit("Removed "+nm);
-      }};
+      if(!confirm(`Remove ${nm} completely?\n\nIf they have simply left, cancel and put a date in `+
+                 `'Active to' instead — that keeps past figures reproducible.`)) return;
+      /* Scenario Mode must never fall through to the live roster mutation path.
+         The live ROSTER is the baseline for every scenario replay, so changing it
+         here would silently turn a hypothetical removal into a real deletion. */
+      if(SCEN.on){
+        scenRemove(nm);
+        toast("Scenario: "+nm+" removed — live roster unchanged");
+        return;
+      }
+      ROSTER.splice(i,1); commit("Removed "+nm);
+    };
   });
   el.querySelector("#rAdd").onclick=()=>{ROSTER.push(blankPerson());commit("Row added — fill in the name");};
   el.querySelector("#rClear").onclick=()=>{

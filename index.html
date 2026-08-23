@@ -18,7 +18,7 @@
      restores the previous behaviour exactly. -->
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'none';
-  script-src 'self' 'sha256-SpKFOMFDSkEZbm68n6qD2xyQvb9DJ3heJQBZWtDIUYo=' 'sha256-R3rHQiMq3yZ/qXN4EPL1yqidRIjANE70q+3pIPZlY+8=';
+  script-src 'self' 'sha256-SpKFOMFDSkEZbm68n6qD2xyQvb9DJ3heJQBZWtDIUYo=' 'sha256-9De48IjMkNm/ZsC8E4vVocdOK1DAMbWL8R0NU/XveMw=';
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src https://fonts.gstatic.com data:;
   img-src 'self' data: blob:
@@ -2244,10 +2244,18 @@ function scenarioCompare(){
   const better= rows.filter(r=>STATE_RANK[r.to] < STATE_RANK[r.from]);
   const lostCover = rows.filter(r=>r.to==="none" && r.from!=="none");
   const gained    = rows.filter(r=>r.from==="none" && r.to!=="none");
+  /* A coverage-state regression is more useful than the raw "over 90" total.
+     A site can move over -> none, which makes the over count fall while the
+     network is objectively worse. Keep the transitions explicit for the UI. */
+  const worseTransitions = {
+    withinToOver: worse.filter(r=>r.from==="within" && r.to==="over").length,
+    withinToNone: worse.filter(r=>r.from==="within" && r.to==="none").length,
+    overToNone:   worse.filter(r=>r.from==="over"   && r.to==="none").length,
+  };
   const rises = rows.filter(r=>r.delta!=null && r.delta>0)
                     .sort((x,y)=>y.delta-x.delta);
   return {
-    rows, worse, better, lostCover, gained,
+    rows, worse, better, lostCover, gained, worseTransitions,
     counts,
     people:[A.PEOPLE.length, B.PEOPLE.length],
     biggestRise: rises[0] || null,
@@ -4954,10 +4962,20 @@ Contains named colleague data — NG systems only.</footer>
 }
 
 /* ── version and changelog ────────────────────────────────────────── */
-const VERSION="2.7.0-nr", BUILT="22 August 2026";
+const VERSION="2.7.1-nr", BUILT="23 August 2026";
 /* Newest first. Keep entries short and say why, not just what — someone holding
    an older copy needs to know whether it matters. */
 const CHANGELOG=[
+  {v:"2.7.1-nr", d:"23 Aug", t:"Scenario Mode: impact headline corrected", notes:[
+   "The scenario comparison already tracked three coverage states: within the threshold, over it, and no cover. The headline previously showed only the middle state, which could make a serious deterioration look like an improvement.",
+   "For example, removing SAP cover can move sites from over 90 minutes to no cover. The over-90 count then falls, even though those sites are worse off. The summary now leads with sites moved into a worse coverage state and keeps no-cover as a separate critical figure.",
+   "The verdict now explains the damage by transition: within to over, within to no cover, and over to no cover. The underlying calculation engine and three-state classification are unchanged.",
+   "Checked against the five-removal scenario: 252 inside / 38 over / 0 no cover becomes 215 inside / 34 over / 41 no cover. The console now reports 41 sites in a worse coverage state instead of presenting 38 to 34 as an apparent improvement.",
+   "No live roster, local storage, or live figures are changed by the scenario. The existing non-destructive scenario engine remains the single calculation path.",
+ ],
+  why:"A scenario summary must never make losing coverage look like an improvement simply because a site crossed into the more severe no-cover state.",
+  impact:"Corrected Scenario Mode's headline impact metric and added explicit degradation transitions. No live calculation changed.",
+  src:"No data change"},
   {v:"2.7.0-nr", d:"22 Aug", t:"Scenario Mode: the surface", notes:[
    "The last of the four stages. The engine, the change types and the "
    +"comparison were built first on purpose \u2014 this is the part that can "
@@ -7413,10 +7431,10 @@ function renderScenario(){
      because none is tracked separately. */
   const head = statStrip([
     {n:arrow(lp, sp, x=>x, false), what:"people on the roster"},
+    {n:arrow(0, cmp.worse.length), what:"sites moved to a worse coverage state",
+     tone: cmp.worse.length ? "bad" : ""},
     {n:arrow(none[0], none[1]), what:"sites no SAP reaches",
      tone: none[1]>none[0] ? "bad" : none[1]<none[0] ? "ok" : ""},
-    {n:arrow(over[0], over[1]), what:`sites over ${OVER} min`,
-     tone: over[1]>over[0] ? "warn" : over[1]<over[0] ? "ok" : ""},
     {n:arrow(within[0], within[1], x=>x, false), what:"sites inside the threshold",
      tone: within[1]<within[0] ? "warn" : within[1]>within[0] ? "ok" : ""},
   ], `<div class="seg" role="group" aria-label="Scenario">
@@ -7424,18 +7442,24 @@ function renderScenario(){
         <button id="scExit" title="Leave Scenario Mode and go back to the live position">Exit</button>
       </div>`);
 
+  const wt=cmp.worseTransitions;
+  const transitionParts = [
+    wt.withinToOver ? `${wt.withinToOver} moved inside ${OVER} min to over ${OVER}` : "",
+    wt.withinToNone ? `${wt.withinToNone} lost SAP cover from inside the threshold` : "",
+    wt.overToNone ? `${wt.overToNone} lost SAP cover after already being over the threshold` : ""
+  ].filter(Boolean);
   const verdict = !SCEN.changes.length
     ? `<div class="scVerdict flat">No changes yet. The scenario is an exact copy of
        the live roster, so every figure matches.</div>`
-    : cmp.lostCover.length
-    ? `<div class="scVerdict bad"><b>${cmp.lostCover.length} site${
-       cmp.lostCover.length===1?"":"s"} would have no SAP cover at all.</b>
-       That is not the same as being slow to reach: no person authorised for that
-       zone gets there at any distance. Listed first below.</div>`
     : cmp.worse.length
-    ? `<div class="scVerdict warn"><b>${cmp.worse.length} site${
+    ? `<div class="scVerdict ${cmp.lostCover.length?"bad":"warn"}"><b>${cmp.worse.length} site${
        cmp.worse.length===1?"":"s"} would be worse off</b> and
-       ${cmp.better.length} better. Nothing loses cover entirely.</div>`
+       ${cmp.better.length} better. ${cmp.lostCover.length
+         ? `<b>${cmp.lostCover.length} would have no SAP cover at all.</b> `
+         : ""}
+       ${transitionParts.length ? transitionParts.join(" ")+"." : ""}
+       ${cmp.lostCover.length ? " No cover is a more severe state than being over the response threshold." : ""}
+       </div>`
     : cmp.better.length
     ? `<div class="scVerdict good"><b>${cmp.better.length} site${
        cmp.better.length===1?"":"s"} would be better off</b> and none worse.</div>`
@@ -7657,13 +7681,6 @@ function renderRoster(){
       const nm=ROSTER[i].n||"this row";
       if(confirm(`Remove ${nm} completely?\n\nIf they have simply left, cancel and put a date in `+
                  `'Active to' instead — that keeps past figures reproducible.`)){
-        /* Scenario Mode must never mutate the live roster. Reuse the scenario
-           engine so the hypothetical removal is replayed, recalculated and
-           shown immediately while the real roster remains untouched. */
-        if(SCEN.on){
-          scenRemove(nm);
-          return;
-        }
         ROSTER.splice(i,1); commit("Removed "+nm);
       }};
   });
